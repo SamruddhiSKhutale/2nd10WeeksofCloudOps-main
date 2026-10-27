@@ -1,3 +1,4 @@
+```yaml
 name: Docker Compose CI/CD
 
 on:
@@ -15,10 +16,14 @@ concurrency:
 
 jobs:
   deploy:
+    name: Deploy Application to AWS EC2
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to AWS EC2
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
@@ -34,42 +39,135 @@ jobs:
 
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
 
+          echo "SSH configuration completed."
+
+      - name: Install Docker Compose and Deploy
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          set -e
+
           ssh -i ~/.ssh/ec2_key \
             -o StrictHostKeyChecking=yes \
             "$EC2_USER@$EC2_HOST" 'bash -se' <<'REMOTE'
+
           set -e
 
           APP_DIR="$HOME/apps/2nd10WeeksofCloudOps-main"
+          REPO_URL="https://github.com/SamruddhiSKhutale/2nd10WeeksofCloudOps-main.git"
+
+          echo "Checking Docker installation..."
+          docker --version
+
+          echo "Checking Docker service..."
+          if ! docker info >/dev/null 2>&1; then
+            sudo systemctl enable --now docker
+          fi
+
+          echo "Checking Docker Compose..."
+          if ! docker compose version >/dev/null 2>&1; then
+
+            ARCH=$(uname -m)
+
+            case "$ARCH" in
+              x86_64)
+                COMPOSE_ARCH="x86_64"
+                ;;
+              aarch64|arm64)
+                COMPOSE_ARCH="aarch64"
+                ;;
+              *)
+                echo "Unsupported architecture: $ARCH"
+                exit 1
+                ;;
+            esac
+
+            echo "Installing Docker Compose..."
+
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+
+            sudo curl -fSL \
+              "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-${COMPOSE_ARCH}" \
+              -o /usr/local/lib/docker/cli-plugins/docker-compose
+
+            sudo chmod +x \
+              /usr/local/lib/docker/cli-plugins/docker-compose
+          fi
+
+          docker compose version
+
+          echo "Preparing application directory..."
+          mkdir -p "$HOME/apps"
 
           if [ ! -d "$APP_DIR/.git" ]; then
-            mkdir -p "$HOME/apps"
-            git clone https://github.com/SamruddhiSKhutale/2nd10WeeksofCloudOps-main.git "$APP_DIR"
+            git clone "$REPO_URL" "$APP_DIR"
           fi
 
           cd "$APP_DIR"
 
+          echo "Pulling latest source code..."
           git fetch origin main
           git reset --hard origin/main
 
-          docker --version
-          docker compose version
+          echo "Locating Docker Compose file..."
+          if [ -f docker-compose.yml ]; then
+            COMPOSE_FILE="docker-compose.yml"
+          elif [ -f docker-compose.yaml ]; then
+            COMPOSE_FILE="docker-compose.yaml"
+          elif [ -f compose.yml ]; then
+            COMPOSE_FILE="compose.yml"
+          elif [ -f compose.yaml ]; then
+            COMPOSE_FILE="compose.yaml"
+          else
+            echo "ERROR: Docker Compose file not found in $APP_DIR"
+            find . -maxdepth 3 -type f \
+              \( -iname '*compose*.yml' -o -iname '*compose*.yaml' \)
+            exit 1
+          fi
 
-          docker compose config
-          docker compose up -d --build --remove-orphans
+          echo "Using Compose file: $COMPOSE_FILE"
 
-          echo "Containers on EC2:"
-          docker compose ps
+          echo "Validating Compose configuration..."
+          docker compose -f "$COMPOSE_FILE" config --quiet
 
-          echo "Running Docker containers:"
+          echo "Building and starting application..."
+          docker compose -f "$COMPOSE_FILE" up \
+            -d --build --remove-orphans
+
+          echo "Waiting for containers to start..."
+          sleep 10
+
+          echo "Container status:"
+          docker compose -f "$COMPOSE_FILE" ps
+
+          echo "Docker container list:"
           docker ps
+
+          echo "Checking for stopped application containers..."
+          if [ -n "$(docker compose -f "$COMPOSE_FILE" ps --all --quiet)" ] &&
+             [ -z "$(docker compose -f "$COMPOSE_FILE" ps --status running --quiet)" ]; then
+            echo "ERROR: No Compose containers are running."
+            docker compose -f "$COMPOSE_FILE" logs --tail=100
+            exit 1
+          fi
+
+          echo "Recent application logs:"
+          docker compose -f "$COMPOSE_FILE" logs --tail=50
+
+          echo "Deployment completed on EC2."
 
           REMOTE
 
-      - name: Deployment completed
+      - name: Deployment Success
         if: success()
-        run: echo "Application deployed successfully to AWS EC2."
+        run: |
+          echo "Application deployed successfully to AWS EC2."
+          echo "Docker Compose deployment finished."
 
-      - name: Deployment failed
+      - name: Deployment Failure
         if: failure()
-        run: echo "Deployment failed. Check the failed step in the Actions logs."
-
+        run: |
+          echo "Deployment failed."
+          echo "Check the failed step in the GitHub Actions logs."
+```
