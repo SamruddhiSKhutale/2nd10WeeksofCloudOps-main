@@ -1,3 +1,4 @@
+```yaml
 name: Docker Compose CI/CD
 
 on:
@@ -6,34 +7,70 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ec2-deployment
+  cancel-in-progress: false
+
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Check Docker
+      - name: Deploy to AWS EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
+          set -e
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/ec2_key \
+            -o StrictHostKeyChecking=yes \
+            "$EC2_USER@$EC2_HOST" 'bash -se' <<'REMOTE'
+          set -e
+
+          APP_DIR="$HOME/apps/2nd10WeeksofCloudOps-main"
+
+          if [ ! -d "$APP_DIR/.git" ]; then
+            mkdir -p "$HOME/apps"
+            git clone https://github.com/SamruddhiSKhutale/2nd10WeeksofCloudOps-main.git "$APP_DIR"
+          fi
+
+          cd "$APP_DIR"
+
+          git fetch origin main
+          git reset --hard origin/main
+
           docker --version
           docker compose version
 
-      - name: Build Docker Images
-        run: docker compose build
+          docker compose config
+          docker compose up -d --build --remove-orphans
 
-      - name: Start Containers
-        run: docker compose up -d
-
-      - name: Verify Containers
-        run: |
+          echo "Containers on EC2:"
           docker compose ps
+
+          echo "Running Docker containers:"
           docker ps
 
-      - name: Show Logs on Failure
-        if: failure()
-        run: docker compose logs --tail=100
+          REMOTE
 
-      - name: Deployment Status
+      - name: Deployment completed
         if: success()
-        run: echo "GitHub Actions workflow completed successfully!"
+        run: echo "Application deployed successfully to AWS EC2."
+
+      - name: Deployment failed
+        if: failure()
+        run: echo "Deployment failed. Check the failed step in the Actions logs."
+```
