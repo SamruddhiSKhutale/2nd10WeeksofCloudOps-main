@@ -1,0 +1,46 @@
+name: Docker Compose CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check Docker
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Stop Existing Containers
+        run: |
+          docker compose down --remove-orphans || true
+
+      - name: Build Docker Images
+        run: |
+          docker compose build
+
+      - name: Deploy Containers
+        run: |
+          docker compose up -d
+
+      - name: Verify Containers
+        run: |
+          docker compose ps
+          docker ps
+
+      - name: Show Container Logs on Failure
+        if: failure()
+        run: |
+          docker compose logs --tail=100
+
+      - name: Deployment Status
+        if: success()
+        run: echo "CI/CD deployment successful!"
