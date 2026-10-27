@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-deploy:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
@@ -19,28 +19,21 @@ jobs:
           docker --version
           docker compose version
 
-      - name: Stop Existing Containers
-        run: |
-          docker compose down --remove-orphans || true
-
       - name: Build Docker Images
-        run: |
-          docker compose build
+        run: docker compose build
 
-      - name: Deploy Containers
-        run: |
-          docker compose up -d
+      - name: Start Containers
+        run: docker compose up -d
 
       - name: Verify Containers
         run: |
           docker compose ps
           docker ps
 
-      - name: Show Container Logs on Failure
+      - name: Show Logs on Failure
         if: failure()
-        run: |
-          docker compose logs --tail=100
+        run: docker compose logs --tail=100
 
       - name: Deployment Status
         if: success()
-        run: echo "CI/CD deployment successful!"
+        run: echo "GitHub Actions workflow completed successfully!"
